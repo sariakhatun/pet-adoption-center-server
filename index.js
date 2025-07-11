@@ -32,6 +32,42 @@ async function run() {
     let db = client.db('petDB');
     let petsCollection = db.collection('pets')
     let donationCampaignsCollection=db.collection('donation-campaigns')
+    let adoptionsCollection=db.collection('adoptions');
+
+
+    //adoption request
+
+    // Make sure to import ObjectId if needed
+
+app.post("/adoptions", async (req, res) => {
+  try {
+    const adoptionData = req.body;
+
+    if (
+      !adoptionData.petId ||
+      !adoptionData.petName ||
+      !adoptionData.petImage ||
+      !adoptionData.adopterName ||
+      !adoptionData.adopterEmail ||
+      !adoptionData.phone ||
+      !adoptionData.address
+    ) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Optionally, mark the pet as adopted here:
+    // await petsCollection.updateOne(
+    //   { _id: new ObjectId(adoptionData.petId) },
+    //   { $set: { adopted: true } }
+    // );
+
+    const result = await adoptionsCollection.insertOne(adoptionData);
+    res.status(201).json({ insertedId: result.insertedId });
+  } catch (error) {
+    console.error("Failed to save adoption:", error);
+    res.status(500).json({ error: "Failed to process adoption request" });
+  }
+});
 
 
     //donation campaign
@@ -148,22 +184,47 @@ app.post("/donation-campaigns", async (req, res) => {
     app.get("/pets", async (req, res) => {
   try {
     const userEmail = req.query.email;
+    const search = req.query.search || "";
+    const category = req.query.category || "";
+    const adopted = req.query.adopted === "false";
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) || 6;
 
-    // if email is provided, filter by email
+    // Build dynamic query
     let query = {};
+
     if (userEmail) {
-      query = { userEmail: userEmail };
-    }
-    let options = {
-        sort:{createdAt:-1}
+      query.userEmail = userEmail;
     }
 
-    const pets = await petsCollection.find(query,options).toArray();
-    res.send(pets);
+    if (adopted) {
+      query.adopted = false;
+    }
+
+    if (search) {
+      query.petName = { $regex: search, $options: "i" };
+    }
+
+   if (category && category !== "all") {
+  query.petCategory = category;
+}
+
+
+    const options = {
+      sort: { createdAt: -1 },
+      skip: page * limit,
+      limit: limit,
+    };
+
+    const pets = await petsCollection.find(query, options).toArray();
+
+    res.json(pets);
   } catch (err) {
+    console.error("Failed to fetch pets:", err);
     res.status(500).json({ error: "Failed to fetch pets" });
   }
 });
+
   // GET /pets/:id - Get a single pet by ID
     app.get("/pets/:id", async (req, res) => {
       try {

@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion,ObjectId  } = require('mongodb');
 dotenv.config(); // Load .env variables
 
 const app = express();
@@ -31,6 +31,108 @@ async function run() {
 
     let db = client.db('petDB');
     let petsCollection = db.collection('pets')
+    let donationCampaignsCollection=db.collection('donation-campaigns')
+
+
+    //donation campaign
+
+    app.get("/donation-campaigns", async (req, res) => {
+  try {
+    const filter = {};
+
+    if (req.query.email) {
+      filter.createdBy = req.query.email;
+    }
+
+    const campaigns = await donationCampaignsCollection
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json(campaigns);
+  } catch (err) {
+    console.error("Error fetching campaigns:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.patch("/donation-campaigns/:id", async (req, res) => {
+  try {
+    const campaignId = req.params.id;
+    const updates = req.body;
+
+    // Allowed fields to update
+    const allowedFields = [
+      "petName",
+      "petImage",
+      "maxDonationAmount",
+      "donationDeadline",
+      "shortDescription",
+      "longDescription",
+      "paused",
+    ];
+
+    // Filter updates to allowed fields only
+    const updateData = {};
+    for (const key of allowedFields) {
+      if (updates.hasOwnProperty(key)) {
+        updateData[key] = updates[key];
+      }
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    const result = await donationCampaignsCollection.updateOne(
+      { _id: new ObjectId(campaignId) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Donation campaign not found" });
+    }
+
+    res.json({ acknowledged: true, modifiedCount: result.modifiedCount });
+  } catch (err) {
+    console.error("Error updating donation campaign:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+
+app.post("/donation-campaigns", async (req, res) => {
+  try {
+    const campaign = req.body;
+
+    // Ensure required fields exist
+    const requiredFields = [
+      "petImage",
+      "maxDonationAmount",
+      "donationDeadline",
+      "shortDescription",
+      "longDescription",
+      "createdBy",
+      "createdAt",
+    ];
+
+    const missingFields = requiredFields.filter(field => !campaign[field]);
+    if (missingFields.length) {
+      return res
+        .status(400)
+        .json({ error: `Missing fields: ${missingFields.join(", ")}` });
+    }
+
+    // Insert into MongoDB
+    const result = await donationCampaignsCollection.insertOne(campaign);
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("Error creating donation campaign:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 
     app.post("/pets", async (req, res) => {
       try {
@@ -57,19 +159,72 @@ async function run() {
     }
 
     const pets = await petsCollection.find(query,options).toArray();
-    res.json(pets);
+    res.send(pets);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch pets" });
+  }
+});
+  // GET /pets/:id - Get a single pet by ID
+    app.get("/pets/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const pet = await petsCollection.findOne({ _id: new ObjectId(id) });
+        if (!pet) return res.status(404).json({ error: "Pet not found" });
+        res.json(pet);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch pet" });
+      }
+    });
+
+
+     // PATCH /pets/:id - Update a pet by ID (partial update)
+    app.patch("/pets/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updateData = req.body;
+        const result = await petsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Pet not found" });
+        }
+        res.json({ message: "Pet updated" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to update pet" });
+      }
+    });
+
+app.delete('/pets/:id', async (req, res) => {
+  try {
+    const petId = req.params.id;
+
+    if (!ObjectId.isValid(petId)) {
+      return res.status(400).json({ error: 'Invalid pet ID' });
+    }
+
+    const result = await petsCollection.deleteOne({ _id: new ObjectId(petId) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Pet not found' });
+    }
+
+    res.json({ message: 'Pet deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete pet' });
   }
 });
 
 
 
 
-   // await client.connect();
+    await client.connect();
    
     // Send a ping to confirm a successful connection
-   // await client.db("admin").command({ ping: 1 });
+    await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error

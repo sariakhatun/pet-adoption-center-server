@@ -37,7 +37,30 @@ async function run() {
 
     //adoption request
 
+app.get("/adoptions", async (req, res) => {
+  const ownerEmail = req.query.ownerEmail;
+  console.log(ownerEmail)
+  const result = await adoptionsCollection
+    .find({ ownerEmail })
+    .sort({ requestedAt: -1 })
+    .toArray();
+  res.send(result);
+});
+
+app.patch("/adoptions/:id", async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  const result = await adoptionsCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status } }
+  );
+
+  res.send(result);
+});
+
     // Make sure to import ObjectId if needed
+
 
 app.post("/adoptions", async (req, res) => {
   try {
@@ -55,11 +78,14 @@ app.post("/adoptions", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Optionally, mark the pet as adopted here:
-    // await petsCollection.updateOne(
-    //   { _id: new ObjectId(adoptionData.petId) },
-    //   { $set: { adopted: true } }
-    // );
+    // Fetch the pet to get the owner email
+    const pet = await petsCollection.findOne({ _id: new ObjectId(adoptionData.petId) });
+    if (!pet) {
+      return res.status(404).json({ error: "Pet not found" });
+    }
+
+    // Add ownerEmail to adoptionData before inserting
+    adoptionData.ownerEmail = pet.userEmail;
 
     const result = await adoptionsCollection.insertOne(adoptionData);
     res.status(201).json({ insertedId: result.insertedId });

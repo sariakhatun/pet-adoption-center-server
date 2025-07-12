@@ -138,6 +138,32 @@ app.post("/donations", async (req, res) => {
 });
 
 
+app.delete("/donations/:donationId", async (req, res) => {
+  try {
+    const donationId = req.params.donationId;
+
+    // Find the donation to get the amount and campaignId
+    const donation = await donationsCollection.findOne({ _id: new ObjectId(donationId) });
+
+    if (!donation) {
+      return res.status(404).json({ error: "Donation not found" });
+    }
+
+    // Delete the donation
+    await donationsCollection.deleteOne({ _id: new ObjectId(donationId) });
+
+    // Subtract the donation amount from the campaign's donatedAmount
+    await donationCampaignsCollection.updateOne(
+      { _id: new ObjectId(donation.campaignId) },
+      { $inc: { donatedAmount: -donation.amount } }
+    );
+
+    res.status(200).json({ message: "Donation refunded successfully" });
+  } catch (err) {
+    console.error("Refund error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 
 
@@ -381,12 +407,13 @@ app.post("/donation-campaigns", async (req, res) => {
     });
 
     // Get all pets
-    app.get("/pets", async (req, res) => {
+  app.get("/pets", async (req, res) => {
   try {
     const userEmail = req.query.email;
     const search = req.query.search || "";
     const category = req.query.category || "";
     const adopted = req.query.adopted === "false";
+    const showAll = req.query.all === "true"; // 🆕 NEW flag
     const page = parseInt(req.query.page) || 0;
     const limit = parseInt(req.query.limit) || 6;
 
@@ -405,15 +432,19 @@ app.post("/donation-campaigns", async (req, res) => {
       query.petName = { $regex: search, $options: "i" };
     }
 
-   if (category && category !== "all") {
-  query.petCategory = category;
-}
+    if (category && category !== "all") {
+      query.petCategory = category;
+    }
 
-
+    // Apply pagination only if all !== true
     const options = {
       sort: { createdAt: -1 },
-      skip: page * limit,
-      limit: limit,
+      ...(showAll
+        ? {}
+        : {
+            skip: page * limit,
+            limit: limit,
+          }),
     };
 
     const pets = await petsCollection.find(query, options).toArray();
@@ -424,6 +455,7 @@ app.post("/donation-campaigns", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch pets" });
   }
 });
+
 
   // GET /pets/:id - Get a single pet by ID
     app.get("/pets/:id", async (req, res) => {

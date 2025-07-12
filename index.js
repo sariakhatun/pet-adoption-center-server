@@ -42,6 +42,40 @@ async function run() {
 
 //donation payment 
 
+
+app.get("/my-donations", async (req, res) => {
+  try {
+    const { donorEmail } = req.query;
+    if (!donorEmail) {
+      return res.status(400).json({ error: "donorEmail query parameter is required" });
+    }
+
+    // Find all donations by this donor email
+    const donations = await donationsCollection.find({ donorEmail }).toArray();
+
+    // For each donation, fetch campaign info and merge
+    const enrichedDonations = await Promise.all(
+      donations.map(async (donation) => {
+        const campaign = await donationCampaignsCollection.findOne({
+          _id: new ObjectId(donation.campaignId),
+        });
+
+        return {
+          ...donation,
+          petName: campaign?.petName || "Unknown Pet",
+          petImage: campaign?.petImage || null,
+        };
+      })
+    );
+
+    res.json(enrichedDonations);
+  } catch (err) {
+    console.error("GET /my-donations error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
 app.post('/create-payment-intent', async (req, res) => {
       let amountInCents = req.body.amountInCents
   const paymentIntent = await stripe.paymentIntents.create({
@@ -71,12 +105,26 @@ app.post("/donations", async (req, res) => {
       return res.status(400).json({ error: "Missing required donation data" });
     }
 
+    // Convert amount to float and timestamp
     donation.amount = parseFloat(donation.amount);
     donation.donatedAt = new Date();
 
+    // ✅ Fetch campaign to check if it's paused
+    const campaign = await donationCampaignsCollection.findOne({
+      _id: new ObjectId(donation.campaignId),
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    if (campaign.paused) {
+      return res.status(403).json({ error: "This campaign is currently paused." });
+    }
+
+    // ✅ Proceed with donation
     const result = await donationsCollection.insertOne(donation);
 
-    // Update total donated amount
     await donationCampaignsCollection.updateOne(
       { _id: new ObjectId(donation.campaignId) },
       { $inc: { donatedAmount: donation.amount } }
@@ -88,6 +136,7 @@ app.post("/donations", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 
 
 
@@ -182,6 +231,23 @@ app.get("/donation-details/:id", async (req, res) => {
   }
 });
 
+// Get all donators for a specific campaign
+app.get("/donation-campaigns/:id/donators", async (req, res) => {
+  try {
+    const campaignId = req.params.id;
+
+    const donations = await donationsCollection
+      .find({ campaignId })
+      .project({ donorName: 1, amount: 1, _id: 0 })
+      .sort({ donatedAt: -1 })
+      .toArray();
+
+    res.send(donations);
+  } catch (err) {
+    console.error("Error fetching donators:", err);
+    res.status(500).json({ error: "Failed to fetch donators" });
+  }
+});
 
 
 app.get("/donation-campaigns", async (req, res) => {
@@ -248,6 +314,25 @@ app.patch("/donation-campaigns/:id", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+app.get('/my-donations-campaign', async (req, res) => {
+  try {
+    const userEmail = req.query.email;
+    if (!userEmail) {
+      return res.status(400).json({ error: "Email query parameter is required" });
+    }
+
+    const campaigns = await donationCampaignsCollection
+      .find({ createdBy: userEmail }) // assuming `createdBy` stores user's email
+      .toArray();
+
+    res.json(campaigns);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 
 
 

@@ -4,6 +4,11 @@ const dotenv = require("dotenv");
 const { MongoClient, ServerApiVersion,ObjectId  } = require('mongodb');
 dotenv.config(); // Load .env variables
 
+console.log('Loaded PAYMENT_GATEWAY_KEY:', process.env.PAYMENT_GATEWAY_KEY);
+
+
+const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);
+
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -33,6 +38,58 @@ async function run() {
     let petsCollection = db.collection('pets')
     let donationCampaignsCollection=db.collection('donation-campaigns')
     let adoptionsCollection=db.collection('adoptions');
+    let donationsCollection=db.collection('donations')
+
+//donation payment 
+
+app.post('/create-payment-intent', async (req, res) => {
+      let amountInCents = req.body.amountInCents
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amountInCents, // amount in cents
+    currency: 'usd',
+    automatic_payment_methods: {enabled: true},
+  });
+
+  res.json({clientSecret: paymentIntent.client_secret});
+});
+
+
+app.post("/donations", async (req, res) => {
+  try {
+    const donation = req.body;
+
+    console.log("Received donation:", donation);
+
+    if (
+      !donation?.campaignId ||
+      !donation?.campaignOwnerEmail ||
+      !donation?.donorEmail ||
+      !donation?.donorName ||
+      !donation?.amount ||
+      !donation?.paymentMethodId
+    ) {
+      return res.status(400).json({ error: "Missing required donation data" });
+    }
+
+    donation.amount = parseFloat(donation.amount);
+    donation.donatedAt = new Date();
+
+    const result = await donationsCollection.insertOne(donation);
+
+    // Update total donated amount
+    await donationCampaignsCollection.updateOne(
+      { _id: new ObjectId(donation.campaignId) },
+      { $inc: { donatedAmount: donation.amount } }
+    );
+
+    res.status(201).send({ insertedId: result.insertedId });
+  } catch (err) {
+    console.error("Donation POST error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
 
 
     //adoption request
@@ -58,9 +115,6 @@ app.patch("/adoptions/:id", async (req, res) => {
 
   res.send(result);
 });
-
-    // Make sure to import ObjectId if needed
-
 
 app.post("/adoptions", async (req, res) => {
   try {
@@ -95,20 +149,51 @@ app.post("/adoptions", async (req, res) => {
   }
 });
 
+ //donation campaign
 
-    //donation campaign
+//     app.get("/donation-campaigns", async (req, res) => {
+//   try {
+//     const filter = {};
 
-    app.get("/donation-campaigns", async (req, res) => {
+//     if (req.query.email) {
+//       filter.createdBy = req.query.email;
+//     }
+
+//     const campaigns = await donationCampaignsCollection
+//       .find(filter)
+//       .sort({ createdAt: -1 })
+//       .toArray();
+
+//     res.json(campaigns);
+//   } catch (err) {
+//     console.error("Error fetching campaigns:", err);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// });
+
+app.get("/donation-details/:id", async (req, res) => {
+  const { id } = req.params;
   try {
-    const filter = {};
+    const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    res.send(campaign);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch campaign" });
+  }
+});
 
-    if (req.query.email) {
-      filter.createdBy = req.query.email;
-    }
+
+
+app.get("/donation-campaigns", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) || 6;
 
     const campaigns = await donationCampaignsCollection
-      .find(filter)
+      .find({})
       .sort({ createdAt: -1 })
+      .skip(page * limit)
+      .limit(limit)
       .toArray();
 
     res.json(campaigns);
@@ -117,6 +202,8 @@ app.post("/adoptions", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+
 
 app.patch("/donation-campaigns/:id", async (req, res) => {
   try {
@@ -195,6 +282,8 @@ app.post("/donation-campaigns", async (req, res) => {
   }
 });
 
+
+//pets
 
     app.post("/pets", async (req, res) => {
       try {

@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { MongoClient, ServerApiVersion,ObjectId  } = require('mongodb');
+let admin = require("firebase-admin");
+
 dotenv.config(); // Load .env variables
 
 console.log('Loaded PAYMENT_GATEWAY_KEY:', process.env.PAYMENT_GATEWAY_KEY);
@@ -16,6 +18,12 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+
+var serviceAccount = require("./b11a12-sariakhatun-firebase-adminsdk-fbsvc-306524a2c3.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 
 
@@ -38,22 +46,153 @@ async function run() {
     let petsCollection = db.collection('pets')
     let donationCampaignsCollection=db.collection('donation-campaigns')
     let adoptionsCollection=db.collection('adoptions');
-    let donationsCollection=db.collection('donations')
+    let donationsCollection=db.collection('donations');
+    let usersCollection = db.collection('users')
+
+
+
+    //custom middleware
+    
+
+    let verifyFBToken =async (req,res,next)=>{
+      let authHeader = req.headers.authorization
+      console.log('header in middleware',authHeader)
+      if(!authHeader){
+       return res.status(401).send({message: 'unauthorized access'})
+      }
+      let token = authHeader.split(' ')[1];
+      if(!token){
+         return res.status(401).send({message: 'unauthorized access'})
+      }
+      //verify token
+     try{
+       let decoded = await admin.auth().verifyIdToken(token)
+       req.decoded=decoded;
+        next();
+
+     }catch(error){
+       return res.status(403).send({message: 'forbidden access'})
+     }
+
+
+    }
+
+
+    //users
+
+
+app.get('/users/search', async (req, res) => {
+  const emailQuery = req.query.email;
+
+  if (!emailQuery) {
+    return res.status(400).send({ message: "Missing email query" });
+  }
+
+  const regex = new RegExp(emailQuery, "i"); // Case-insensitive
+
+  try {
+    const users = await usersCollection
+      .find({ email: { $regex: regex } })
+      .project({
+        email: 1,
+        name: 1,
+        role: 1,
+        createdAt: 1,  // ✅ use 'createdAt' not 'created_at'
+        // photoURL: 1, // ❌ remove if not in data
+      })
+      .limit(10)
+      .toArray();
+
+    res.send(users);
+  } catch (error) {
+    console.error("Error searching users", error);
+    res.status(500).send({ message: "Error searching users" });
+  }
+});
+
+
+app.get("/users", async (req, res) => {
+  try {
+    const users = await usersCollection.find().toArray();
+    res.send(users);
+  } catch (err) {
+    console.error("Error fetching users:", err);
+    res.status(500).send({ error: "Internal Server Error" });
+  }
+});
+
+
+const { ObjectId } = require("mongodb");
+
+app.patch("/users/:id/role", async (req, res) => {
+  const userId = req.params.id;
+  const { role } = req.body;
+
+  // Validate input
+  if (!["admin", "user"].includes(role)) {
+    return res.status(400).send({ message: "Invalid role" });
+  }
+
+  try {
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(userId) },
+      { $set: { role: role } }
+    );
+
+ 
+    res.send({ message: `Role updated to ${role}`, result});
+  } catch (error) {
+    console.error("Error updating user role:", error);
+    res.status(500).send({ message: "Error updating user role" });
+  }
+});
+
+
+    app.post('/users',async(req,res)=>{
+        let email = req.body.email;
+        let userExists = await usersCollection.findOne({email});
+        if(userExists){
+        //update last logged in info
+         return res.send({ message: "User already exists", inserted: false });
+         }
+
+
+         let user = req.body;
+         let result = await usersCollection.insertOne(user);
+         res.send(result)
+
+    })
 
 //donation payment 
 
 
-app.get("/my-donations", async (req, res) => {
+app.get("/my-donations",verifyFBToken, async (req, res) => {
   try {
+    console.log('headers in donation',req.headers)
+
+    
     const { donorEmail } = req.query;
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) || 5;
+
     if (!donorEmail) {
       return res.status(400).json({ error: "donorEmail query parameter is required" });
     }
 
-    // Find all donations by this donor email
-    const donations = await donationsCollection.find({ donorEmail }).toArray();
+    const query = { donorEmail };
 
-    // For each donation, fetch campaign info and merge
+    // Count total donations for pagination
+    const total = await donationsCollection.countDocuments(query);
+
+    // Paginated donations
+    const donations = await donationsCollection
+      .find(query)
+      .skip(page * limit)
+      .limit(limit)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    // Enrich each donation with campaign info
     const enrichedDonations = await Promise.all(
       donations.map(async (donation) => {
         const campaign = await donationCampaignsCollection.findOne({
@@ -68,12 +207,16 @@ app.get("/my-donations", async (req, res) => {
       })
     );
 
-    res.json(enrichedDonations);
+    res.json({
+      donations: enrichedDonations,
+      total, // <-- send total count
+    });
   } catch (err) {
     console.error("GET /my-donations error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 
 
 app.post('/create-payment-intent', async (req, res) => {
@@ -169,7 +312,7 @@ app.delete("/donations/:donationId", async (req, res) => {
 
     //adoption request
 
-app.get("/adoptions", async (req, res) => {
+app.get("/adoptions",verifyFBToken, async (req, res) => {
   const ownerEmail = req.query.ownerEmail;
   console.log(ownerEmail)
   const result = await adoptionsCollection
@@ -246,7 +389,7 @@ app.post("/adoptions", async (req, res) => {
 //   }
 // });
 
-app.get("/donation-details/:id", async (req, res) => {
+app.get("/donation-details/:id",verifyFBToken, async (req, res) => {
   const { id } = req.params;
   try {
     const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
@@ -258,7 +401,7 @@ app.get("/donation-details/:id", async (req, res) => {
 });
 
 // Get all donators for a specific campaign
-app.get("/donation-campaigns/:id/donators", async (req, res) => {
+app.get("/donation-campaigns/:id/donators",verifyFBToken, async (req, res) => {
   try {
     const campaignId = req.params.id;
 
@@ -276,7 +419,7 @@ app.get("/donation-campaigns/:id/donators", async (req, res) => {
 });
 
 
-app.get("/donation-campaigns", async (req, res) => {
+app.get("/donation-campaigns",verifyFBToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 0;
     const limit = parseInt(req.query.limit) || 6;
@@ -341,7 +484,7 @@ app.patch("/donation-campaigns/:id", async (req, res) => {
   }
 });
 
-app.get('/my-donations-campaign', async (req, res) => {
+app.get('/my-donations-campaign',verifyFBToken, async (req, res) => {
   try {
     const userEmail = req.query.email;
     if (!userEmail) {
@@ -398,6 +541,7 @@ app.post("/donation-campaigns", async (req, res) => {
 
     app.post("/pets", async (req, res) => {
       try {
+       // console.log('headers in pets',req.headers)
         const pet = req.body;
         const result = await petsCollection.insertOne(pet);
         res.status(201).json(result);
@@ -407,9 +551,16 @@ app.post("/donation-campaigns", async (req, res) => {
     });
 
     // Get all pets
-  app.get("/pets", async (req, res) => {
+
+
+
+
+  app.get("/pets",verifyFBToken, async (req, res) => {
   try {
     const userEmail = req.query.email;
+    
+
+
     const search = req.query.search || "";
     const category = req.query.category || "";
     const adopted = req.query.adopted === "false";
@@ -456,9 +607,45 @@ app.post("/donation-campaigns", async (req, res) => {
   }
 });
 
+app.get("/my-pets", verifyFBToken, async (req, res) => {
+  try {
+    const userEmail = req.query.email;
+
+    console.log('decoded',req.decoded);
+
+    if(req.decoded.email !==userEmail){
+        return res.status(403).send({message: 'forbidden access'})
+    }
+
+    const page = parseInt(req.query.page) || 0;
+    const limit = 10; // 🔥 Fixed limit to 10 per page
+
+    if (!userEmail) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const query = { userEmail };
+
+    const total = await petsCollection.countDocuments(query);
+    const pets = await petsCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(page * limit)
+      .limit(limit)
+      .toArray();
+
+    res.json({ total, pets });
+  } catch (err) {
+    console.error("Failed to fetch user pets:", err);
+    res.status(500).json({ error: "Failed to fetch pets" });
+  }
+});
+
+
+
 
   // GET /pets/:id - Get a single pet by ID
-    app.get("/pets/:id", async (req, res) => {
+    app.get("/pets/:id",verifyFBToken, async (req, res) => {
       try {
         const id = req.params.id;
         const pet = await petsCollection.findOne({ _id: new ObjectId(id) });

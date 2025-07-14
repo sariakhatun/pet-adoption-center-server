@@ -76,12 +76,22 @@ async function run() {
 
 
     }
+    //verify admin
+    let verifyAdmin = async(req,res,next)=>{
+        let email = req.decoded.email;
+        let query = {email};
+        let user = await usersCollection.findOne(query);
+        if(!user || user.role !=='admin'){
+             return res.status(403).send({message: 'forbidden access'})
+        }
+        next();
+    }
 
 
     //users
 
 
-app.get('/users/search', async (req, res) => {
+app.get('/users/search',verifyFBToken,verifyAdmin, async (req, res) => {
   const emailQuery = req.query.email;
 
   if (!emailQuery) {
@@ -98,7 +108,7 @@ app.get('/users/search', async (req, res) => {
         name: 1,
         role: 1,
         createdAt: 1,  // ✅ use 'createdAt' not 'created_at'
-        // photoURL: 1, // ❌ remove if not in data
+         photoURL: 1, 
       })
       .limit(10)
       .toArray();
@@ -107,6 +117,24 @@ app.get('/users/search', async (req, res) => {
   } catch (error) {
     console.error("Error searching users", error);
     res.status(500).send({ message: "Error searching users" });
+  }
+});
+
+app.get("/users/:email/role", async (req, res) => {
+  const email = req.params.email;
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    const user = await usersCollection.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.send({ email, role: user.role ||'user' });
+  } catch (error) {
+    console.error("Failed to fetch user role:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -122,9 +150,8 @@ app.get("/users", async (req, res) => {
 });
 
 
-const { ObjectId } = require("mongodb");
 
-app.patch("/users/:id/role", async (req, res) => {
+app.patch("/users/:id/role",verifyFBToken,verifyAdmin, async (req, res) => {
   const userId = req.params.id;
   const { role } = req.body;
 
@@ -148,24 +175,52 @@ app.patch("/users/:id/role", async (req, res) => {
 });
 
 
-    app.post('/users',async(req,res)=>{
-        let email = req.body.email;
-        let userExists = await usersCollection.findOne({email});
-        if(userExists){
-        //update last logged in info
-         return res.send({ message: "User already exists", inserted: false });
-         }
+    // app.post('/users',async(req,res)=>{
+    //     let email = req.body.email;
+    //     let userExists = await usersCollection.findOne({email});
+    //     if(userExists){
+    //     //update last logged in info
+    //      return res.send({ message: "User already exists", inserted: false });
+    //      }
 
 
-         let user = req.body;
-         let result = await usersCollection.insertOne(user);
-         res.send(result)
+    //      let user = req.body;
+    //      let result = await usersCollection.insertOne(user);
+    //      res.send(result)
 
-    })
+    // })
 
 //donation payment 
+app.post('/users', async (req, res) => {
+  try {
+    let email = req.body.email;
+    let userExists = await usersCollection.findOne({ email });
+
+    if (userExists) {
+      // Update lastLoginAt to current time for existing user
+      await usersCollection.updateOne(
+        { email },
+        { $set: { lastLoginAt: new Date().toISOString() } }
+      );
+
+      return res.send({ message: "User already exists", inserted: false });
+    }
+
+    let user = req.body;
+    user.createdAt = new Date().toISOString();
+    user.lastLoginAt = new Date().toISOString();
+
+    let result = await usersCollection.insertOne(user);
+    res.send(result);
+  } catch (error) {
+    console.error("Error in /users POST:", error);
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
 
 
+
+//donation
 app.get("/my-donations",verifyFBToken, async (req, res) => {
   try {
     console.log('headers in donation',req.headers)
@@ -389,13 +444,33 @@ app.post("/adoptions", async (req, res) => {
 //   }
 // });
 
-app.get("/donation-details/:id",verifyFBToken, async (req, res) => {
+// app.get("/donation-details/:id",verifyFBToken, async (req, res) => {
+//   const { id } = req.params;
+//   try {
+//     const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
+//     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+//     res.send(campaign);
+//   } catch (error) {
+//     res.status(500).json({ error: "Failed to fetch campaign" });
+//   }
+// });
+
+
+app.get("/donation-details/:id", verifyFBToken, async (req, res) => {
   const { id } = req.params;
   try {
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
     const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
-    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    res.send(campaign);
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    res.json(campaign);
   } catch (error) {
+    console.error("Failed to fetch campaign:", error);
     res.status(500).json({ error: "Failed to fetch campaign" });
   }
 });
@@ -418,20 +493,90 @@ app.get("/donation-campaigns/:id/donators",verifyFBToken, async (req, res) => {
   }
 });
 
+app.get("/donation-campaigns/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    res.json(campaign);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
-app.get("/donation-campaigns",verifyFBToken, async (req, res) => {
+// app.get("/donation-campaigns",verifyFBToken, async (req, res) => {
+//   try {
+//     const page = parseInt(req.query.page) || 0;
+//     const limit = parseInt(req.query.limit) || 6;
+
+//     const campaigns = await donationCampaignsCollection
+//       .find({})
+//       .sort({ createdAt: -1 })
+//       .skip(page * limit)
+//       .limit(limit)
+//       .toArray();
+
+//     res.json(campaigns);
+//   } catch (err) {
+//     console.error("Error fetching campaigns:", err);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// });
+
+app.get("/donation-campaigns",async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 0;
     const limit = parseInt(req.query.limit) || 6;
+    const excludeId = req.query.exclude;
 
+    let filter = {};
+    if (excludeId && ObjectId.isValid(excludeId)) {
+      filter._id = { $ne: new ObjectId(excludeId) };
+    }
+
+    // Get total count of filtered campaigns
+    const total = await donationCampaignsCollection.countDocuments(filter);
+
+    // Get paginated campaigns sorted by newest first
     const campaigns = await donationCampaignsCollection
-      .find({})
+      .find(filter)
       .sort({ createdAt: -1 })
       .skip(page * limit)
       .limit(limit)
       .toArray();
 
-    res.json(campaigns);
+    res.json({ total, campaigns });
+  } catch (err) {
+    console.error("Error fetching campaigns:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+app.get("/all-donation-campaigns", verifyFBToken,verifyAdmin,async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) || 6;
+    const excludeId = req.query.exclude;
+
+    let filter = {};
+    if (excludeId && ObjectId.isValid(excludeId)) {
+      filter._id = { $ne: new ObjectId(excludeId) };
+    }
+
+    // Get total count of filtered campaigns
+    const total = await donationCampaignsCollection.countDocuments(filter);
+
+    // Get paginated campaigns sorted by newest first
+    const campaigns = await donationCampaignsCollection
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .skip(page * limit)
+      .limit(limit)
+      .toArray();
+
+    res.json({ total, campaigns });
   } catch (err) {
     console.error("Error fetching campaigns:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -440,7 +585,7 @@ app.get("/donation-campaigns",verifyFBToken, async (req, res) => {
 
 
 
-app.patch("/donation-campaigns/:id", async (req, res) => {
+app.patch("/donation-campaigns/:id",verifyFBToken, async (req, res) => {
   try {
     const campaignId = req.params.id;
     const updates = req.body;
@@ -536,6 +681,27 @@ app.post("/donation-campaigns", async (req, res) => {
   }
 });
 
+// DELETE a donation campaign by ID
+app.delete("/donation-campaigns/:id", verifyFBToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid campaign ID" });
+    }
+
+    const result = await donationCampaignsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    res.json({ message: "Campaign deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting campaign:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 
 //pets
 
@@ -552,10 +718,30 @@ app.post("/donation-campaigns", async (req, res) => {
 
     // Get all pets
 
+// Admin-only: Get all pets with pagination
+app.get("/all-pets", verifyFBToken,verifyAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) || 10;
+
+    const total = await petsCollection.countDocuments();
+    const pets = await petsCollection
+      .find({})
+      .skip(page * limit)
+      .limit(limit)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json({ total, pets });
+  } catch (err) {
+    console.error("Failed to fetch all pets:", err);
+    res.status(500).json({ error: "Failed to fetch all pets" });
+  }
+});
 
 
 
-  app.get("/pets",verifyFBToken, async (req, res) => {
+  app.get("/pets", async (req, res) => {
   try {
     const userEmail = req.query.email;
     
@@ -607,22 +793,53 @@ app.post("/donation-campaigns", async (req, res) => {
   }
 });
 
-app.get("/my-pets", verifyFBToken, async (req, res) => {
+// app.get("/my-pets", verifyFBToken, async (req, res) => {
+//   try {
+//     const userEmail = req.query.email;
+//     console.log('user email form my-pets',userEmail)
+//     console.log('decoded email form my-pets',req.decoded.email)
+//     //console.log('decoded',req.decoded);
+
+//     if(req.decoded.email !==userEmail){
+//         return res.status(403).send({message: 'forbidden access'})
+//     }
+
+//     const page = parseInt(req.query.page) || 0;
+//     const limit = 10; // 🔥 Fixed limit to 10 per page
+
+//     if (!userEmail) {
+//       return res.status(400).json({ error: "Email is required" });
+//     }
+
+//     const query = { userEmail };
+
+//     const total = await petsCollection.countDocuments(query);
+//     const pets = await petsCollection
+//       .find(query)
+//       .sort({ createdAt: -1 })
+//       .skip(page * limit)
+//       .limit(limit)
+//       .toArray();
+
+//     res.json({ total, pets });
+//   } catch (err) {
+//     console.error("Failed to fetch user pets:", err);
+//     res.status(500).json({ error: "Failed to fetch pets" });
+//   }
+// });
+
+
+
+
+  // GET /pets/:id - Get a single pet by ID
+    
+
+  app.get("/my-pets", verifyFBToken, async (req, res) => {
   try {
-    const userEmail = req.query.email;
-
-    console.log('decoded',req.decoded);
-
-    if(req.decoded.email !==userEmail){
-        return res.status(403).send({message: 'forbidden access'})
-    }
+    const userEmail = req.decoded.email; // ✅ Use token email only
 
     const page = parseInt(req.query.page) || 0;
-    const limit = 10; // 🔥 Fixed limit to 10 per page
-
-    if (!userEmail) {
-      return res.status(400).json({ error: "Email is required" });
-    }
+    const limit = 10;
 
     const query = { userEmail };
 
@@ -641,11 +858,9 @@ app.get("/my-pets", verifyFBToken, async (req, res) => {
   }
 });
 
-
-
-
-  // GET /pets/:id - Get a single pet by ID
-    app.get("/pets/:id",verifyFBToken, async (req, res) => {
+  
+  
+  app.get("/pets/:id",verifyFBToken, async (req, res) => {
       try {
         const id = req.params.id;
         const pet = await petsCollection.findOne({ _id: new ObjectId(id) });
@@ -659,25 +874,34 @@ app.get("/my-pets", verifyFBToken, async (req, res) => {
 
 
      // PATCH /pets/:id - Update a pet by ID (partial update)
-    app.patch("/pets/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const updateData = req.body;
-        const result = await petsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: updateData }
-        );
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ error: "Pet not found" });
-        }
-        res.json({ message: "Pet updated" });
-      } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Failed to update pet" });
-      }
-    });
+   app.patch("/pets/:id",verifyFBToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updateData = req.body;
 
-app.delete('/pets/:id', async (req, res) => {
+    console.log("🔁 PATCH Request to update pet:", id);
+    console.log("📝 Update Data:", updateData);
+
+    const result = await petsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateData }
+    );
+
+    console.log("✅ MongoDB Update Result:", result);
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Pet not found" });
+    }
+
+    res.json({ message: "Pet updated" });
+  } catch (err) {
+    console.error("❌ Update Error:", err);
+    res.status(500).json({ error: "Failed to update pet" });
+  }
+});
+
+
+app.delete('/pets/:id',verifyFBToken, async (req, res) => {
   try {
     const petId = req.params.id;
 

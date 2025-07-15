@@ -6,7 +6,7 @@ let admin = require("firebase-admin");
 
 dotenv.config(); // Load .env variables
 
-console.log('Loaded PAYMENT_GATEWAY_KEY:', process.env.PAYMENT_GATEWAY_KEY);
+//console.log('Loaded PAYMENT_GATEWAY_KEY:', process.env.PAYMENT_GATEWAY_KEY);
 
 
 const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);

@@ -81,6 +81,8 @@ async function run() {
 
     //verify email
     let verifyTokenEmail = (req, res, next) => {
+        console.log('query email',req.query.email)
+        console.log('decoded email',req.decoded.email)
     if (req.query.email !== req.decoded.email) {
         return res.status(403).send({ message: 'forbidden access' })
     }
@@ -233,7 +235,7 @@ app.post('/users', async (req, res) => {
 
 
 //donation
-app.get("/my-donations",verifyFBToken,verifyTokenEmail, async (req, res) => {
+app.get("/my-donations",verifyFBToken, async (req, res) => {
   try {
     console.log('headers in donation',req.headers)
 

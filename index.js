@@ -18,8 +18,8 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-
-var serviceAccount = require("./b11a12-sariakhatun-firebase-adminsdk-fbsvc-306524a2c3.json");
+let decodedKey = Buffer.from(process.env.FB_SERVICE_KEY,'base64').toString('utf8')
+var serviceAccount = JSON.parse(decodedKey)
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -71,11 +71,23 @@ async function run() {
         next();
 
      }catch(error){
+        console.log('error from verifyFBToken',error)
        return res.status(403).send({message: 'forbidden access'})
      }
 
 
     }
+
+
+    //verify email
+    let verifyTokenEmail = (req, res, next) => {
+    if (req.query.email !== req.decoded.email) {
+        return res.status(403).send({ message: 'forbidden access' })
+    }
+    next();
+}
+
+
     //verify admin
     let verifyAdmin = async(req,res,next)=>{
         let email = req.decoded.email;
@@ -221,7 +233,7 @@ app.post('/users', async (req, res) => {
 
 
 //donation
-app.get("/my-donations",verifyFBToken, async (req, res) => {
+app.get("/my-donations",verifyFBToken,verifyTokenEmail, async (req, res) => {
   try {
     console.log('headers in donation',req.headers)
 
@@ -336,7 +348,7 @@ app.post("/donations", async (req, res) => {
 });
 
 
-app.delete("/donations/:donationId", async (req, res) => {
+app.delete("/donations/:donationId",verifyFBToken, async (req, res) => {
   try {
     const donationId = req.params.donationId;
 
@@ -456,7 +468,7 @@ app.post("/adoptions", async (req, res) => {
 // });
 
 
-app.get("/donation-details/:id", verifyFBToken, async (req, res) => {
+app.get("/donation-details/:id", async (req, res) => {
   const { id } = req.params;
   try {
     if (!ObjectId.isValid(id)) {
@@ -493,7 +505,7 @@ app.get("/donation-campaigns/:id/donators",verifyFBToken, async (req, res) => {
   }
 });
 
-app.get("/donation-campaigns/:id", async (req, res) => {
+app.get("/donation-campaigns/:id",verifyFBToken, async (req, res) => {
   try {
     const id = req.params.id;
     const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
@@ -650,7 +662,7 @@ app.get('/my-donations-campaign',verifyFBToken, async (req, res) => {
 
 
 
-app.post("/donation-campaigns", async (req, res) => {
+app.post("/donation-campaigns",verifyFBToken, async (req, res) => {
   try {
     const campaign = req.body;
 
@@ -682,7 +694,7 @@ app.post("/donation-campaigns", async (req, res) => {
 });
 
 // DELETE a donation campaign by ID
-app.delete("/donation-campaigns/:id", verifyFBToken, async (req, res) => {
+app.delete("/donation-campaigns/:id",verifyFBToken, async (req, res) => {
   try {
     const id = req.params.id;
     if (!ObjectId.isValid(id)) {
@@ -705,7 +717,7 @@ app.delete("/donation-campaigns/:id", verifyFBToken, async (req, res) => {
 
 //pets
 
-    app.post("/pets", async (req, res) => {
+    app.post("/pets",verifyFBToken, async (req, res) => {
       try {
        // console.log('headers in pets',req.headers)
         const pet = req.body;
@@ -928,7 +940,7 @@ app.delete('/pets/:id',verifyFBToken, async (req, res) => {
    // await client.connect();
    
     // Send a ping to confirm a successful connection
-   // await client.db("admin").command({ ping: 1 });
+  // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error

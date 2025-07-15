@@ -436,25 +436,6 @@ app.post("/adoptions", async (req, res) => {
 
  //donation campaign
 
-//     app.get("/donation-campaigns", async (req, res) => {
-//   try {
-//     const filter = {};
-
-//     if (req.query.email) {
-//       filter.createdBy = req.query.email;
-//     }
-
-//     const campaigns = await donationCampaignsCollection
-//       .find(filter)
-//       .sort({ createdAt: -1 })
-//       .toArray();
-
-//     res.json(campaigns);
-//   } catch (err) {
-//     console.error("Error fetching campaigns:", err);
-//     res.status(500).json({ error: "Internal server error" });
-//   }
-// });
 
 // app.get("/donation-details/:id",verifyFBToken, async (req, res) => {
 //   const { id } = req.params;
@@ -693,7 +674,6 @@ app.post("/donation-campaigns",verifyFBToken, async (req, res) => {
   }
 });
 
-// DELETE a donation campaign by ID
 app.delete("/donation-campaigns/:id",verifyFBToken, async (req, res) => {
   try {
     const id = req.params.id;

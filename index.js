@@ -381,7 +381,7 @@ app.delete("/donations/:donationId",verifyFBToken, async (req, res) => {
 
     //adoption request
 
-app.get("/adoptions",verifyFBToken, async (req, res) => {
+app.get("/adoptions", async (req, res) => {
   const ownerEmail = req.query.ownerEmail;
   console.log(ownerEmail)
   const result = await adoptionsCollection
@@ -854,7 +854,7 @@ app.get("/all-pets", verifyFBToken,verifyAdmin, async (req, res) => {
 
   
   
-  app.get("/pets/:id",verifyFBToken, async (req, res) => {
+  app.get("/pets/:id", async (req, res) => {
       try {
         const id = req.params.id;
         const pet = await petsCollection.findOne({ _id: new ObjectId(id) });

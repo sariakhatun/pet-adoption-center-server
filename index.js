@@ -54,29 +54,66 @@ async function run() {
     //custom middleware
     
 
-    let verifyFBToken =async (req,res,next)=>{
-      let authHeader = req.headers.authorization
-      console.log('header in middleware',authHeader)
-      if(!authHeader){
-       return res.status(401).send({message: 'unauthorized access'})
-      }
-      let token = authHeader.split(' ')[1];
-      if(!token){
-         return res.status(401).send({message: 'unauthorized access'})
-      }
-      //verify token
-     try{
-       let decoded = await admin.auth().verifyIdToken(token)
-       req.decoded=decoded;
-        next();
+    // let verifyFBToken =async (req,res,next)=>{
+    //   let authHeader = req.headers.authorization
+    //   console.log('header in middleware',authHeader)
+    //   if(!authHeader){
+    //    return res.status(401).send({message: 'unauthorized access'})
+    //   }
+    //   let token = authHeader.split(' ')[1];
+    //   if(!token){
+    //      return res.status(401).send({message: 'unauthorized access'})
+    //   }
+    //   //verify token
+    //  try{
+    //    let decoded = await admin.auth().verifyIdToken(token)
+    //    req.decoded=decoded;
+    //     next();
 
-     }catch(error){
-        console.log('error from verifyFBToken',error)
-       return res.status(403).send({message: 'forbidden access'})
-     }
+    //  }catch(error){
+    //     console.log('error from verifyFBToken',error)
+    //    return res.status(403).send({message: 'forbidden access'})
+    //  }
 
 
+    // }
+//     let verifyFBToken = async (req, res, next) => {
+//   try {
+//     let email = req.decoded.email.toLowerCase(); // normalize
+//     console.log("Decoded email:", decoded.email);
+
+//     let user = await usersCollection.findOne({ email });
+//     if (!user || user.role !== 'admin') {
+//       return res.status(403).send({ message: 'forbidden access' });
+//     }
+//     next();
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).send({ message: 'Internal server error' });
+//   }
+// };
+let verifyFBToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ message: 'Unauthorized access' });
     }
+
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ message: 'Unauthorized access' });
+    }
+
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.decoded = decoded; // attach decoded token to req
+    next();
+  } catch (err) {
+    console.error("Error verifying Firebase token:", err);
+    res.status(403).json({ message: 'Forbidden access' });
+  }
+};
+
+
 
 
     //verify email
@@ -100,6 +137,35 @@ async function run() {
         }
         next();
     }
+
+    //stats
+    // GET /dashboard/stats
+app.get("/dashboard/stats", async (req, res) => {
+  try {
+    const totalPets = await petsCollection.countDocuments();
+    const totalAdoptions = await adoptionsCollection.countDocuments();
+    const totalDonationCampaigns = await donationCampaignsCollection.countDocuments();
+    
+    const totalDonationsAgg = await donationsCollection.aggregate([
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]).toArray();
+    const totalDonations = totalDonationsAgg[0]?.total || 0;
+
+    const totalAdmins = await usersCollection.countDocuments({ role: "admin" });
+
+    res.json({
+      totalPets,
+      totalAdoptions,
+      totalDonationCampaigns,
+      totalDonations,
+      totalAdmins
+    });
+  } catch (err) {
+    console.error("Error fetching dashboard stats:", err);
+    res.status(500).json({ error: "Failed to fetch dashboard stats" });
+  }
+});
+
 
 
     //users
@@ -152,6 +218,20 @@ app.get("/users/:email/role", async (req, res) => {
   }
 });
 
+// Get current logged-in user
+app.get("/users/me", verifyFBToken, async (req, res) => {
+  try {
+    const email = req.decoded.email; // From Firebase token
+    const user = await usersCollection.findOne({ email: email.toLowerCase() });
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.json(user);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 app.get("/users", async (req, res) => {
   try {

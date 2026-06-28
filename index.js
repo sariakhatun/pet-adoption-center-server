@@ -312,6 +312,37 @@ app.post('/users', async (req, res) => {
   }
 });
 
+//claude
+app.patch("/users/me", verifyFBToken, async (req, res) => {
+  try {
+    const email = req.decoded.email;
+  const allowedFields = ["phone", "address", "nid", "occupation", "dateOfBirth", "bio", "photoURL"];
+
+    const updateData = {};
+    for (const key of allowedFields) {
+      if (req.body.hasOwnProperty(key)) {
+        updateData[key] = req.body[key];
+      }
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    updateData.updatedAt = new Date().toISOString();
+
+    await usersCollection.updateOne(
+      { email },
+      { $set: updateData }
+    );
+
+    res.json({ message: "Profile updated successfully" });
+  } catch (err) {
+    console.error("PATCH /users/me error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 
 
 //donation
@@ -471,21 +502,164 @@ app.get("/adoptions", async (req, res) => {
   res.send(result);
 });
 
-app.patch("/adoptions/:id", async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
+// app.patch("/adoptions/:id", async (req, res) => {
+//   const { id } = req.params;
+//   const { status } = req.body;
 
-  const result = await adoptionsCollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: { status } }
-  );
+//   const result = await adoptionsCollection.updateOne(
+//     { _id: new ObjectId(id) },
+//     { $set: { status } }
+//   );
 
-  res.send(result);
+//   res.send(result);
+// });
+
+//copilot
+app.patch("/adoptions/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid adoption request ID" });
+    }
+
+    const adoption = await adoptionsCollection.findOne({ _id: new ObjectId(id) });
+    if (!adoption) {
+      return res.status(404).json({ error: "Adoption request not found" });
+    }
+
+    const requester = await usersCollection.findOne({ email: req.decoded.email });
+    const isAdmin = requester?.role === "admin";
+
+    if (!isAdmin && adoption.ownerEmail !== req.decoded.email) {
+      return res.status(403).json({ error: "Forbidden access" });
+    }
+
+    await adoptionsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status, updatedAt: new Date().toISOString() } }
+    );
+
+    if (status === "accepted") {
+      await petsCollection.updateOne(
+        { _id: new ObjectId(adoption.petId) },
+        { $set: { adopted: true, status: "adopted" } }
+      );
+
+      await adoptionsCollection.updateMany(
+        {
+          petId: adoption.petId,
+          _id: { $ne: new ObjectId(id) },
+          status: { $in: ["pending", "requested"] },
+        },
+        { $set: { status: "rejected", updatedAt: new Date().toISOString() } }
+      );
+    }
+
+    if (status !== "accepted") {
+      const hasAccepted = await adoptionsCollection.findOne({
+        petId: adoption.petId,
+        status: "accepted",
+      });
+
+      if (!hasAccepted) {
+        await petsCollection.updateOne(
+          { _id: new ObjectId(adoption.petId) },
+          { $set: { adopted: false, status: "available" } }
+        );
+      }
+    }
+
+    res.json({ message: `Request ${status} successfully` });
+  } catch (error) {
+    console.error("PATCH /adoptions/:id error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /my-adoptions - Get all adoption requests by the adopter
+app.get("/my-adoptions", verifyFBToken, async (req, res) => {
+  try {
+    const adopterEmail = req.decoded.email;
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) ||6;
+
+    const query = { adopterEmail: { $regex: new RegExp(`^${adopterEmail}$`, 'i') } };
+
+    const total = await adoptionsCollection.countDocuments(query);
+
+    const adoptions = await adoptionsCollection
+      .find(query)
+      .sort({ requestedAt: -1 })
+      .skip(page * limit)
+      .limit(limit)
+      .toArray();
+
+    const enriched = await Promise.all(
+      adoptions.map(async (adoption) => {
+        const pet = await petsCollection.findOne({ _id: new ObjectId(adoption.petId) });
+        return {
+          ...adoption,
+          ownerEmail: pet?.userEmail || adoption.ownerEmail || "Unknown",
+          petCategory: pet?.petCategory || "Unknown",
+          petAge: pet?.petAge || "N/A",
+        };
+      })
+    );
+
+    res.json({ adoptions: enriched, total });
+  } catch (err) {
+    console.error("GET /my-adoptions error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/adoptions/:id", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid adoption ID" });
+    }
+
+    const adoption = await adoptionsCollection.findOne({ _id: new ObjectId(id) });
+    if (!adoption) {
+      return res.status(404).json({ error: "Adoption request not found" });
+    }
+
+    if (adoption.adopterEmail !== req.decoded.email) {
+      return res.status(403).json({ error: "Forbidden access" });
+    }
+
+    if (adoption.status === "accepted") {
+      return res.status(400).json({ error: "Accepted requests cannot be cancelled" });
+    }
+
+    await adoptionsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    res.json({ message: "Adoption request cancelled successfully" });
+  } catch (err) {
+    console.error("DELETE /adoptions/:id error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 app.post("/adoptions", async (req, res) => {
   try {
     const adoptionData = req.body;
+
+    // if (
+    //   !adoptionData.petId ||
+    //   !adoptionData.petName ||
+    //   !adoptionData.petImage ||
+    //   !adoptionData.adopterName ||
+    //   !adoptionData.adopterEmail ||
+    //   !adoptionData.phone ||
+    //   !adoptionData.address
+    // ) {
+    //   return res.status(400).json({ error: "Missing required fields" });
+    // }
 
     if (
       !adoptionData.petId ||
@@ -494,7 +668,14 @@ app.post("/adoptions", async (req, res) => {
       !adoptionData.adopterName ||
       !adoptionData.adopterEmail ||
       !adoptionData.phone ||
-      !adoptionData.address
+      !adoptionData.address ||
+      !adoptionData.nid ||
+      !adoptionData.occupation ||
+      !adoptionData.houseType ||
+      !adoptionData.hasGarden ||
+      !adoptionData.hasOtherPets ||
+      !adoptionData.experience ||
+      !adoptionData.reason
     ) {
       return res.status(400).json({ error: "Missing required fields" });
     }
@@ -565,6 +746,103 @@ app.get("/donation-campaigns/:id/donators",verifyFBToken, async (req, res) => {
   } catch (err) {
     console.error("Error fetching donators:", err);
     res.status(500).json({ error: "Failed to fetch donators" });
+  }
+});
+
+//claude
+
+app.post("/donation-campaigns/:id/expenses", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, amount, receiptImage } = req.body;
+
+    if (!title || !amount || !receiptImage) {
+      return res.status(400).json({ error: "Title, amount and receipt image are required" });
+    }
+
+    const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+    if (campaign.createdBy !== req.decoded.email) {
+      return res.status(403).json({ error: "Forbidden access" });
+    }
+
+    const existingExpenses = campaign.expenses || [];
+    const totalExpenses = existingExpenses.reduce((sum, e) => sum + e.amount, 0);
+    const donatedAmount = campaign.donatedAmount || 0;
+    const newExpenseAmount = parseFloat(amount);
+
+  
+    if (totalExpenses + newExpenseAmount > donatedAmount) {
+      const remaining = donatedAmount - totalExpenses;
+      return res.status(400).json({
+        error: `Expense exceeds available balance. You can only add up to ৳${remaining.toFixed(2)} more.`,
+      });
+    }
+
+    const expense = {
+      id: new ObjectId().toString(),
+      title,
+      amount: newExpenseAmount,
+      receiptImage,
+      addedAt: new Date().toISOString(),
+    };
+
+    await donationCampaignsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $push: { expenses: expense } }
+    );
+
+    res.status(201).json({ message: "Expense added successfully", expense });
+  } catch (err) {
+    console.error("POST /expenses error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/donation-campaigns/:id/expenses", verifyFBToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const campaign = await donationCampaignsCollection.findOne({ 
+      _id: new ObjectId(id) 
+    });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+    res.json({ 
+      expenses: campaign.expenses || [],
+      donatedAmount: campaign.donatedAmount || 0
+    });
+  } catch (err) {
+    console.error("GET /expenses error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/donation-campaigns/:id/expenses/:expenseId", verifyFBToken, async (req, res) => {
+  try {
+    const { id, expenseId } = req.params;
+    console.log("DELETE expense - campaignId:", id, "expenseId:", expenseId);
+    console.log("Decoded email:", req.decoded.email);
+
+    const campaign = await donationCampaignsCollection.findOne({ _id: new ObjectId(id) });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+    console.log("Campaign createdBy:", campaign.createdBy);
+
+    if (campaign.createdBy?.toLowerCase() !== req.decoded.email?.toLowerCase()) {
+      return res.status(403).json({ error: "Forbidden access" });
+    }
+
+    const result = await donationCampaignsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $pull: { expenses: { id: expenseId.toString() } } }
+    );
+
+    console.log("Pull result:", result);
+    res.json({ message: "Expense deleted successfully" });
+  } catch (err) {
+    console.error("DELETE /expenses error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

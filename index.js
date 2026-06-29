@@ -200,6 +200,19 @@ app.get('/users/search',verifyFBToken,verifyAdmin, async (req, res) => {
   }
 });
 
+app.post("/users/photos-by-emails", verifyFBToken, async (req, res) => {
+  try {
+    const { emails } = req.body;
+    const users = await usersCollection
+      .find({ email: { $in: emails } })
+      .project({ email: 1, photoURL: 1 })
+      .toArray();
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 app.get("/users/:email/role", async (req, res) => {
   const email = req.params.email;
   if (!email) {
@@ -311,6 +324,8 @@ app.post('/users', async (req, res) => {
     res.status(500).send({ message: "Internal Server Error" });
   }
 });
+
+
 
 //claude
 app.patch("/users/me", verifyFBToken, async (req, res) => {
@@ -1003,12 +1018,44 @@ app.get('/my-donations-campaign',verifyFBToken, async (req, res) => {
 
 
 
-app.post("/donation-campaigns",verifyFBToken, async (req, res) => {
+// app.post("/donation-campaigns",verifyFBToken, async (req, res) => {
+//   try {
+//     const campaign = req.body;
+
+//     // Ensure required fields exist
+//     const requiredFields = [
+//       "petImage",
+//       "maxDonationAmount",
+//       "donationDeadline",
+//       "shortDescription",
+//       "longDescription",
+//       "createdBy",
+//       "createdAt",
+//     ];
+
+//     const missingFields = requiredFields.filter(field => !campaign[field]);
+//     if (missingFields.length) {
+//       return res
+//         .status(400)
+//         .json({ error: `Missing fields: ${missingFields.join(", ")}` });
+//     }
+
+//     // Insert into MongoDB
+//     const result = await donationCampaignsCollection.insertOne(campaign);
+//     res.status(201).json(result);
+//   } catch (err) {
+//     console.error("Error creating donation campaign:", err);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// });
+
+app.post("/donation-campaigns", verifyFBToken, async (req, res) => {
   try {
     const campaign = req.body;
 
-    // Ensure required fields exist
+    // Required fields check
     const requiredFields = [
+      "petName",        // ← add
       "petImage",
       "maxDonationAmount",
       "donationDeadline",
@@ -1020,12 +1067,23 @@ app.post("/donation-campaigns",verifyFBToken, async (req, res) => {
 
     const missingFields = requiredFields.filter(field => !campaign[field]);
     if (missingFields.length) {
-      return res
-        .status(400)
-        .json({ error: `Missing fields: ${missingFields.join(", ")}` });
+      return res.status(400).json({ error: `Missing fields: ${missingFields.join(", ")}` });
     }
 
-    // Insert into MongoDB
+    // Individual donor NID validation
+    if (campaign.donorType === "individual") {
+      if (!campaign.ownerNID || !campaign.nidFrontImage || !campaign.nidBackImage) {
+        return res.status(400).json({ error: "NID number and both NID images are required for individual donors" });
+      }
+    }
+
+    // Rescue center validation
+    if (campaign.donorType === "rescue_center") {
+      if (!campaign.organizationName || !campaign.registrationNumber) {
+        return res.status(400).json({ error: "Organization name and registration number are required" });
+      }
+    }
+
     const result = await donationCampaignsCollection.insertOne(campaign);
     res.status(201).json(result);
   } catch (err) {
